@@ -24,7 +24,7 @@
 # GitHub tarball extracts to <repo>-<tag>/
 %global srcdir          %{upstream_repo}-%{desktop_tag}
 
-# Fixed /usr/lib path for the application bundle.  NOT %{_libdir} — Electron
+# Fixed /usr/lib path for the application bundle.  NOT %%{_libdir} — Electron
 # apps are self-contained bundles mixing arch-specific binaries with
 # arch-independent resources.  A fixed prefix avoids breaking Electron's
 # internal library resolution (same convention used by Firefox, VS Code, etc.)
@@ -214,8 +214,40 @@ export ELECTRON_CACHE=$PWD/.electron-cache
 # Tell electron-builder to use local unpacked Electron
 export ELECTRON_OVERRIDE_DIST_PATH=$PWD/node_modules/electron/dist
 
+# ---- Create napi CLI shim -------------------------------------------------
+# @napi-rs/cli is published as a pre-compiled binary with platform-specific
+# optional packages (e.g., @napi-rs/cli-linux-x64-gnu).  The vendor tarball
+# is created on x86_64, so the aarch64 variant is absent — `napi` command is
+# not found on aarch64 builders.
+#
+# Solution: inject a shim that replaces `napi build --platform --no-js` with
+# a direct `cargo build --release` invocation.  The shim is placed in
+# .bin-override/ which is prepended to PATH before node_modules/.bin, so it
+# takes precedence over any (non-functional) napi wrapper that may exist.
+#
+# The shim runs with CWD = apps/desktop/desktop_native/napi/ (set by build.js).
+# The Cargo workspace root is desktop_native/, so compiled output lands in
+# ../target/release/libdesktop_napi.so relative to the CWD.
+mkdir -p .bin-override
+cat > .bin-override/napi << 'NAPI_SHIM_EOF'
+#!/usr/bin/bash
+# napi shim — replaces @napi-rs/cli for `napi build --platform --no-js`
+set -euo pipefail
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64)  SUFFIX="linux-x64-gnu" ;;
+    aarch64) SUFFIX="linux-arm64-gnu" ;;
+    *)       echo "napi shim: unsupported arch: $ARCH" >&2; exit 1 ;;
+esac
+echo "napi shim: building desktop_napi (release) for $ARCH → desktop_napi.${SUFFIX}.node"
+cargo build --release
+cp "../target/release/libdesktop_napi.so" "desktop_napi.${SUFFIX}.node"
+NAPI_SHIM_EOF
+chmod +x .bin-override/napi
+
 # Ensure root node_modules/.bin is in PATH for npx/webpack/etc.
-export PATH=$PWD/node_modules/.bin:$PATH
+# .bin-override/ is prepended so the napi shim takes priority.
+export PATH=$PWD/.bin-override:$PWD/node_modules/.bin:$PATH
 
 # ---- Rebuild native Node.js addons for current arch -----------------------
 # The vendor tarball was created with --ignore-scripts, so node-gyp addons
@@ -224,8 +256,10 @@ npm rebuild 2>&1 || echo "WARN: npm rebuild had non-zero exit (may be OK)"
 
 # ---- Build Rust native modules --------------------------------------------
 # Builds: desktop_napi.*.node, desktop_proxy, libprocess_isolation.so
+# Pass --release so all Rust artifacts (proxy, process_isolation) are
+# built in release mode, not debug.
 pushd apps/desktop
-npm run build-native
+node desktop_native/build.js --release
 popd
 
 # ---- Webpack bundle (main + renderer + preload) ----------------------------
@@ -339,5 +373,5 @@ appstream-util validate-relax --nonet \
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
-* Sat Mar 15 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
+* Sun Mar 15 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
 - Initial package build from upstream source
