@@ -27,6 +27,11 @@ outdir ?= .
 srpm:
 	@echo "==> Building SRPM for Bitwarden Desktop $(VERSION)"
 
+	# ---- Install tools needed for source generation ----
+	# The COPR source-generation environment is a minimal Fedora container.
+	# These packages are NOT available by default.
+	dnf install -y nodejs npm rust cargo rpmdevtools zstd curl
+
 	# ---- Set up rpmbuild tree ----
 	mkdir -p rpmbuild/{SOURCES,SPECS,BUILD,RPMS,SRPMS}
 
