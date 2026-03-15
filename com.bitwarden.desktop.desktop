@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Bitwarden
+GenericName=Password Manager
+Comment=A secure and free password manager for all of your devices
+Exec=bitwarden %u
+Terminal=false
+Type=Application
+Icon=com.bitwarden.desktop
+StartupWMClass=Bitwarden
+Categories=System;Security;Utility;
+MimeType=x-scheme-handler/bitwarden;
+Keywords=password;security;vault;encryption;

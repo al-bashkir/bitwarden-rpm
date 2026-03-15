@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metainfo for Bitwarden Desktop.
+     Upstream does not provide this file; it is maintained as part of
+     the Fedora/COPR packaging.  Update <releases> on each version bump. -->
+<component type="desktop-application">
+  <id>com.bitwarden.desktop</id>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <name>Bitwarden</name>
+  <summary>A secure and free password manager for all of your devices</summary>
+
+  <description>
+    <p>
+      Bitwarden is a free and open-source password management service that
+      stores sensitive information such as website credentials in an
+      encrypted vault.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Cross-platform password synchronization</li>
+      <li>End-to-end AES-256 bit encryption</li>
+      <li>Password generator</li>
+      <li>Two-factor authentication support</li>
+      <li>Secure password sharing with organizations</li>
+      <li>Biometric unlock support</li>
+      <li>SSH agent integration</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.bitwarden.desktop.desktop</launchable>
+
+  <url type="homepage">https://bitwarden.com</url>
+  <url type="bugtracker">https://github.com/bitwarden/clients/issues</url>
+  <url type="help">https://bitwarden.com/help/</url>
+  <url type="vcs-browser">https://github.com/bitwarden/clients</url>
+
+  <developer id="com.bitwarden">
+    <name>Bitwarden Inc.</name>
+  </developer>
+
+  <provides>
+    <binary>bitwarden</binary>
+  </provides>
+
+  <content_rating type="oars-1.1" />
+
+  <!-- FIXME: update <releases> on every version bump -->
+  <releases>
+    <release version="2026.2.1" date="2026-02-15">
+      <description>
+        <p>Desktop release 2026.2.1</p>
+      </description>
+    </release>
+  </releases>
+
+  <!-- FIXME: add a <screenshots> section with a valid upstream screenshot URL.
+       AppStream guidelines recommend at least one screenshot (16:9, ~1600px wide).
+       Example:
+       <screenshots>
+         <screenshot type="default">
+           <caption>Bitwarden vault overview</caption>
+           <image>https://bitwarden.com/images/screenshots/desktop-vault.png</image>
+         </screenshot>
+       </screenshots>
+  -->
+</component>
