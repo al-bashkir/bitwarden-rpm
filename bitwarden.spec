@@ -19,6 +19,15 @@
 %global electron_ver    39.2.6
 # ---------------------------------------------------------------------------
 
+# Electron bundles pre-built Chromium binaries that use split-DWARF (DWO)
+# debug info.  rpmbuild's debuginfo extraction (objcopy / gdb-add-index)
+# cannot process them, causing:
+#   objcopy: stGupDug: can't add section '.gdb_index'
+#   ERROR: GDB exited with exit status 1 during index generation
+# Disable debuginfo generation entirely — the bundled .so files already
+# have their own debug info stripped by upstream's Electron build.
+%global debug_package %{nil}
+
 %global upstream_repo   clients
 %global desktop_tag     desktop-v%{version}
 # GitHub tarball extracts to <repo>-<tag>/
@@ -249,10 +258,16 @@ chmod +x .bin-override/napi
 # .bin-override/ is prepended so the napi shim takes priority.
 export PATH=$PWD/.bin-override:$PWD/node_modules/.bin:$PATH
 
-# ---- Rebuild native Node.js addons for current arch -----------------------
-# The vendor tarball was created with --ignore-scripts, so node-gyp addons
-# are not yet compiled.  npm rebuild compiles them offline.
-npm rebuild 2>&1 || echo "WARN: npm rebuild had non-zero exit (may be OK)"
+# ---- NOTE: npm rebuild is intentionally skipped --------------------------
+# The vendor tarball is created with --ignore-scripts.  Running npm rebuild
+# on the entire monorepo node_modules takes hours and exceeds the COPR
+# 5-hour build timeout.
+#
+# Native modules we actually need are all Rust-based (desktop_napi,
+# desktop_proxy, libprocess_isolation.so) and are built below by build.js.
+# Modern npm packages that ship platform-specific binaries (esbuild, swc,
+# keytar) use optionalDependencies which are already resolved by npm ci
+# during vendor tarball generation — no rebuild needed.
 
 # ---- Build Rust native modules --------------------------------------------
 # Builds: desktop_napi.*.node, desktop_proxy, libprocess_isolation.so
