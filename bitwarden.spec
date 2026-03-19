@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.2.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -157,6 +157,18 @@ sensitive information such as website credentials in an encrypted vault.
 This package provides the Bitwarden Desktop application, built from upstream
 source.  The Electron runtime is bundled; all JavaScript and Rust application
 code is compiled during the RPM build.
+
+# ============================================================================
+#  %pre
+# ============================================================================
+%pre
+# Remove any stale update-alternatives entry for bitwarden.  This can be left
+# behind when uninstalling the official Bitwarden RPM (from bitwarden.com)
+# which registers /usr/bin/bitwarden via alternatives.  Without cleanup the
+# alternatives daemon prints a spurious warning during our installation.
+if command -v alternatives >/dev/null 2>&1; then
+    alternatives --remove-all bitwarden 2>/dev/null || :
+fi
 
 # ============================================================================
 #  %prep
@@ -283,12 +295,21 @@ npm run build
 popd
 
 # ---- electron-builder: create unpacked application directory ---------------
+# -c.buildDependenciesFromSource=false: we pre-build all Rust native modules
+# above via build.js --release.  Letting electron-builder rebuild them during
+# packing interferes with our pre-built .node file and slows the build.
+# NODE_ENV=production: ensures after-pack.js and any spawned scripts see the
+# correct environment (cross-env already sets this for webpack, but electron-
+# builder's own Node context inherits the shell environment).
+export NODE_ENV=production
 pushd apps/desktop
 %ifarch x86_64
-npx electron-builder --linux --x64 --dir --config electron-builder.json -p never
+npx electron-builder --linux --x64 --dir --config electron-builder.json \
+    -c.buildDependenciesFromSource=false -p never
 %endif
 %ifarch aarch64
-npx electron-builder --linux --arm64 --dir --config electron-builder.json -p never
+npx electron-builder --linux --arm64 --dir --config electron-builder.json \
+    -c.buildDependenciesFromSource=false -p never
 %endif
 popd
 
@@ -313,8 +334,12 @@ cp -a ${eb_unpacked}/* %{buildroot}%{bwdir}/
 # (unnecessary).
 rm -f %{buildroot}%{bwdir}/chrome-sandbox
 
-# Ensure the main binary is executable
+# Ensure the launcher wrapper (from upstream's after-pack.js linux-wrapper.sh)
+# is executable.  The actual Electron binary is renamed to bitwarden-app by
+# after-pack.js; ensure it is executable too.
 chmod 0755 %{buildroot}%{bwdir}/bitwarden
+test -f %{buildroot}%{bwdir}/bitwarden-app && \
+    chmod 0755 %{buildroot}%{bwdir}/bitwarden-app
 
 # Ensure native binaries are executable
 test -f %{buildroot}%{bwdir}/desktop_proxy && \
@@ -360,9 +385,19 @@ desktop-file-validate %{buildroot}%{_datadir}/applications/com.bitwarden.desktop
 appstream-util validate-relax --nonet \
     %{buildroot}%{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
-# Smoke-test: verify the Electron binary is functional
-# (may fail in headless build environments; treat as best-effort)
-%{buildroot}%{bwdir}/bitwarden --version || \
+# Verify that after-pack.js ran correctly:
+#   - bitwarden-app must exist (Electron binary renamed from bitwarden)
+#   - bitwarden  must be the wrapper script (not the Electron binary)
+#   - app.asar   must be present (webpack + electron-builder packing succeeded)
+test -f %{buildroot}%{bwdir}/bitwarden-app || \
+    { echo "ERROR: bitwarden-app missing — after-pack.js did not rename the Electron binary"; exit 1; }
+test -f %{buildroot}%{bwdir}/resources/app.asar || \
+    { echo "ERROR: app.asar missing — webpack/electron-builder build failed"; exit 1; }
+
+# Smoke-test: verify the Electron binary responds to --version.
+# bitwarden-app is the actual Electron binary; the wrapper (bitwarden) chains
+# into it but expects a display server which is unavailable in the build env.
+%{buildroot}%{bwdir}/bitwarden-app --version || \
     echo "WARN: --version smoke test failed (expected in headless env)"
 
 # ============================================================================
@@ -388,5 +423,14 @@ appstream-util validate-relax --nonet \
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
+* Thu Mar 19 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-2
+- Add %%pre scriptlet to remove stale update-alternatives entry for bitwarden
+  that is left behind when the official Bitwarden RPM is uninstalled
+- Pass -c.buildDependenciesFromSource=false to electron-builder to prevent it
+  from rebuilding pre-built Rust native modules during packing
+- Set NODE_ENV=production for the electron-builder invocation
+- Add chmod 0755 for bitwarden-app (Electron binary renamed by after-pack.js)
+- Tighten %%check: fail the build if bitwarden-app or app.asar are absent
+
 * Sun Mar 15 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
 - Initial package build from upstream source
