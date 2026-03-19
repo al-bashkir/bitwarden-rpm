@@ -136,10 +136,6 @@ Requires:       hicolor-icon-theme
 Provides:       bundled(electron) = %{electron_ver}
 Provides:       bundled(nodejs-modules)
 
-# Compatibility: the old COPR SCM package was named bitwarden-desktop.
-# Any tooling referencing that name will still resolve correctly.
-Provides:       bitwarden-desktop = %{version}-%{release}
-
 # ---- SELinux ---------------------------------------------------------------
 # Bitwarden Desktop runs as an unprivileged Electron application.
 # - No listening on privileged ports
@@ -430,7 +426,6 @@ test -f %{buildroot}%{bwdir}/resources/app.asar || \
 * Thu Mar 19 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-2
 - Add %%pre scriptlet to remove stale update-alternatives entry for bitwarden
   that is left behind when the official Bitwarden RPM is uninstalled
-- Add Provides: bitwarden-desktop for compatibility with old COPR package name
 - Pass -c.buildDependenciesFromSource=false to electron-builder to prevent it
   from rebuilding pre-built Rust native modules during packing
 - Set NODE_ENV=production for the electron-builder invocation
