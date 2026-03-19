@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.2.1
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -290,9 +290,25 @@ node desktop_native/build.js --release
 popd
 
 # ---- Webpack bundle (main + renderer + preload) ----------------------------
+# Run each webpack config SEQUENTIALLY so that any failure is immediately
+# visible and fails the build rather than being swallowed by concurrently.
+# Angular 20 AOT compilation can require 3-4 GB of heap; raise the Node.js
+# limit to avoid silent OOM-kills that produce no output files.
+export NODE_OPTIONS="--max-old-space-size=4096"
 pushd apps/desktop
-npm run build
+# cross-env in each script already sets NODE_ENV=production for webpack itself.
+npm run build:main
+npm run build:renderer
+npm run build:preload
 popd
+unset NODE_OPTIONS
+
+# Verify the renderer produced its output; if index.html is missing the asar
+# will be empty of renderer content and the app will show a blank window.
+test -f apps/desktop/build/index.html || \
+    { echo "ERROR: renderer webpack build produced no index.html"; exit 1; }
+test -f apps/desktop/build/app/main.js || \
+    { echo "ERROR: renderer webpack build produced no app/main.js"; exit 1; }
 
 # ---- electron-builder: create unpacked application directory ---------------
 # -c.buildDependenciesFromSource=false: we pre-build all Rust native modules
@@ -394,6 +410,25 @@ test -f %{buildroot}%{bwdir}/bitwarden-app || \
 test -f %{buildroot}%{bwdir}/resources/app.asar || \
     { echo "ERROR: app.asar missing — webpack/electron-builder build failed"; exit 1; }
 
+# Verify that index.html landed inside the asar.  Electron's asar is a custom
+# archive; use node to read the JSON header and grep for "index.html".
+node -e "
+const fs = require('fs');
+const f = fs.openSync('%{buildroot}%{bwdir}/resources/app.asar', 'r');
+const hdrSizeBuf = Buffer.alloc(8);
+fs.readSync(f, hdrSizeBuf, 0, 8, 8);
+const hdrSize = hdrSizeBuf.readUInt32LE(4);
+const hdrBuf = Buffer.alloc(hdrSize);
+fs.readSync(f, hdrBuf, 0, hdrSize, 16);
+fs.closeSync(f);
+const hdr = JSON.parse(hdrBuf.toString('utf8'));
+if (!hdr.files['index.html']) {
+  console.error('ERROR: index.html not found in app.asar — renderer webpack output was not packed');
+  process.exit(1);
+}
+console.log('OK: index.html found in app.asar');
+"
+
 # Smoke-test: verify the Electron binary responds to --version.
 # bitwarden-app is the actual Electron binary; the wrapper (bitwarden) chains
 # into it but expects a display server which is unavailable in the build env.
@@ -423,6 +458,16 @@ test -f %{buildroot}%{bwdir}/resources/app.asar || \
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
+* Thu Mar 19 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-3
+- Run webpack builds sequentially (build:main, build:renderer, build:preload)
+  instead of via concurrently so that a renderer failure is immediately visible
+  and fails the RPM build rather than being silently swallowed
+- Set NODE_OPTIONS=--max-old-space-size=4096 for Angular 20 AOT compilation
+  to avoid silent OOM-kills leaving build/index.html absent
+- Add post-webpack assertions: fail the build if build/index.html or
+  build/app/main.js are absent (catches the blank-window root cause at build time)
+- Add asar content check in %%check: fail if index.html is not in app.asar
+
 * Thu Mar 19 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-2
 - Add %%pre scriptlet to remove stale update-alternatives entry for bitwarden
   that is left behind when the official Bitwarden RPM is uninstalled
