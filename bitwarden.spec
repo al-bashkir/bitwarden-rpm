@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.2.1
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -271,20 +271,42 @@ path.write_text(text)
 print("webpack.base.js: sourcemaps + minification disabled for RPM build")
 PY
 
-# Remove native @swc/core binaries on x86_64.  SWC's native memory (outside the
-# V8 heap) can push the renderer webpack process past the 2 GiB cgroup limit,
-# causing a silent OOM-kill that leaves build/index.html missing.  Without the
-# native binary babel-loader falls back to pure-JS compilation (same as aarch64).
-%ifarch x86_64
-for swc_node in \
-    node_modules/@swc/core-linux-x64-gnu/swc.linux-x64-gnu.node \
-    node_modules/@swc/core-linux-x64-musl/swc.linux-x64-musl.node; do
-    if [ -f "$swc_node" ]; then
-        rm -f "$swc_node"
-        echo "Removed native SWC binary: $swc_node (memory reduction for COPR x86_64)"
-    fi
-done
-%endif
+# ---- Create a dedicated renderer-only webpack config -----------------------
+# webpack.config.js exports a function that returns [mainConfig, rendererConfig,
+# preloadConfig].  Using `--config-name renderer` to filter this array silently
+# produces no output on COPR x86_64 builders (webpack exits 0 but writes
+# nothing).  The root cause is that `--config-name` filtering on function-based
+# configs that return arrays does not work reliably across all webpack-cli
+# versions present in the vendored node_modules.
+#
+# Workaround: create a thin wrapper config (webpack.renderer.only.js) that
+# directly imports webpack.base.js's buildConfig(), calls it, and exports only
+# element [1] (the renderer config) as a plain object — not a function, not an
+# array.  webpack then compiles exactly the renderer without any filtering.
+cat > apps/desktop/webpack.renderer.only.js << 'RENDERER_CFG_EOF'
+/* RPM-build shim — exports only the renderer config from webpack.base.js.
+ * Created during %prep; not present in the upstream source tree. */
+const path = require("path");
+const { buildConfig } = require("./webpack.base");
+const configs = buildConfig({
+  configName: "OSS",
+  renderer: {
+    entry: path.resolve(__dirname, "src/app/main.ts"),
+    entryModule: "src/app/app.module#AppModule",
+    tsConfig: path.resolve(__dirname, "tsconfig.renderer.json"),
+  },
+  main: {
+    entry: path.resolve(__dirname, "src/entry.ts"),
+    tsConfig: path.resolve(__dirname, "tsconfig.main.json"),
+  },
+  preload: {
+    entry: path.resolve(__dirname, "src/preload.ts"),
+    tsConfig: path.resolve(__dirname, "tsconfig.preload.json"),
+  },
+});
+/* buildConfig returns [mainConfig, rendererConfig, preloadConfig]; export [1] */
+module.exports = configs[1];
+RENDERER_CFG_EOF
 
 # ============================================================================
 #  %build
@@ -370,10 +392,11 @@ pushd apps/desktop
 # cross-env in each script already sets NODE_ENV=production for webpack itself.
 npm run build:main
 
-# Capture the renderer exit code explicitly so that a silent OOM-kill (which
-# causes npm to return 0) is still detected and reported as a build failure.
+# Use the dedicated renderer-only config created in %prep.  This bypasses the
+# --config-name filtering that silently produces no output when applied to a
+# function-based config returning an array on this webpack-cli version.
 set +e
-npm run build:renderer
+cross-env NODE_ENV=production webpack --config webpack.renderer.only.js
 _renderer_exit=$?
 set -e
 printf "renderer webpack exit code: %d\n" "$_renderer_exit"
@@ -540,6 +563,12 @@ console.log('OK: index.html found in app.asar');
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
+* Fri Mar 20 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-6
+- Create webpack.renderer.only.js in %%prep to compile the renderer directly
+  without --config-name filtering; the filtering silently emits no output when
+  applied to a function-based config returning an array on the vendored
+  webpack-cli, causing the renderer to exit 0 with nothing written to build/
+
 * Fri Mar 20 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-5
 - Remove native @swc/core x86_64 binaries from the vendor tarball during %%prep
   so babel-loader falls back to pure-JS on x86_64 (same as aarch64); the native
