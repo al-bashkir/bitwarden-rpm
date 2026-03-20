@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.2.1
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -220,27 +220,71 @@ rm -f apps/desktop/desktop_native/rust-toolchain.toml
 # renderer production build enables full sourcemaps and minification, which is
 # enough to make Angular 20's webpack pass silently fail under that limit.
 #
-# For the RPM build we do not need production sourcemaps, and minification is
-# not required for a packaged local desktop app.  Disabling both keeps the
-# renderer build within COPR's memory budget while preserving runtime behavior.
+# Two changes are made here:
+#
+# 1) webpack.base.js is patched inline to disable renderer sourcemaps and
+#    minification.  For a packaged local desktop app these are unnecessary and
+#    save ~800 MB of peak heap during the Angular compilation.
+#
+# 2) On x86_64 the vendored node_modules include the native @swc/core binary
+#    (swc.linux-x64-gnu.node).  SWC allocates memory outside the V8 heap so it
+#    is not constrained by --max-old-space-size.  On x86_64 SWC native memory
+#    plus the V8 heap can push the total process above the 2 GiB cgroup limit;
+#    the kernel then OOM-kills webpack and npm returns 0 (because npm does not
+#    propagate SIGKILL exit status in all cases), silently producing a build
+#    directory with no index.html.  On aarch64 the x86_64 SWC binary is not
+#    usable so babel-loader falls back to pure-JS and the build succeeds.
+#
+#    Removing the native SWC binary on x86_64 forces the same pure-JS fallback
+#    as aarch64, keeping total process memory within the 2 GiB budget.
 python3 - <<'PY'
 from pathlib import Path
 
 path = Path("apps/desktop/webpack.base.js")
 text = path.read_text()
+
+orig = text
+
+# Disable renderer source-map devtool (saves ~400 MB V8 heap during compilation)
 text = text.replace('    devtool: "source-map",\n', '    devtool: false,\n', 1)
+
+# Disable renderer minification (saves ~400 MB V8 heap during TerserPlugin)
 text = text.replace(
     '    optimization: {\n      minimizer: [\n',
     '    optimization: {\n      minimize: false,\n      minimizer: [\n',
     1,
 )
+
+# Remove SourceMapDevToolPlugin (its source-map pass also consumes significant memory)
 text = text.replace(
     '      new webpack.SourceMapDevToolPlugin({\n        include: ["app/main.js"],\n      }),\n',
     '',
     1,
 )
+
+if text == orig:
+    import sys
+    print("ERROR: webpack.base.js patch did not match any strings — check indentation", file=sys.stderr)
+    sys.exit(1)
+
 path.write_text(text)
+print("webpack.base.js: sourcemaps + minification disabled for RPM build")
 PY
+
+# Remove native @swc/core binaries on x86_64.  SWC's native memory (outside the
+# V8 heap) can push the renderer webpack process past the 2 GiB cgroup limit,
+# causing a silent OOM-kill that leaves build/index.html missing.  Without the
+# native binary babel-loader falls back to pure-JS compilation (same as aarch64).
+%ifarch x86_64
+for swc_node in \
+    node_modules/@swc/core-linux-x64-gnu/swc.linux-x64-gnu.node \
+    node_modules/@swc/core-linux-x64-musl/swc.linux-x64-musl.node; do
+    if [ -f "$swc_node" ]; then
+        rm -f "$swc_node"
+        echo "Removed native SWC binary: $swc_node (memory reduction for COPR x86_64)"
+    fi
+done
+%endif
 
 # ============================================================================
 #  %build
@@ -325,13 +369,24 @@ export NODE_OPTIONS="--max-old-space-size=1400"
 pushd apps/desktop
 # cross-env in each script already sets NODE_ENV=production for webpack itself.
 npm run build:main
+
+# Capture the renderer exit code explicitly so that a silent OOM-kill (which
+# causes npm to return 0) is still detected and reported as a build failure.
+set +e
 npm run build:renderer
+_renderer_exit=$?
+set -e
+printf "renderer webpack exit code: %d\n" "$_renderer_exit"
+ls -la build/ || true
+
 npm run build:preload
 popd
 unset NODE_OPTIONS
 
 # Verify the renderer produced its output; if index.html is missing the asar
 # will be empty of renderer content and the app will show a blank window.
+test "$_renderer_exit" -eq 0 || \
+    { echo "ERROR: renderer webpack exited with code ${_renderer_exit}"; exit 1; }
 test -f apps/desktop/build/index.html || \
     { echo "ERROR: renderer webpack build produced no index.html"; exit 1; }
 test -f apps/desktop/build/app/main.js || \
@@ -485,6 +540,15 @@ console.log('OK: index.html found in app.asar');
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
+* Fri Mar 20 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-5
+- Remove native @swc/core x86_64 binaries from the vendor tarball during %%prep
+  so babel-loader falls back to pure-JS on x86_64 (same as aarch64); the native
+  SWC binary allocates memory outside the V8 heap and was pushing the renderer
+  webpack process above the 2 GiB COPR cgroup limit (silent OOM-kill returning 0)
+- Add error-trapping around the renderer build to catch silent failures
+- Make webpack.base.js patch fail explicitly if the target strings are not found
+- Bump Release to 5
+
 * Fri Mar 20 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-4
 - Patch upstream webpack.base.js during %%prep to disable renderer production
   sourcemaps and minification for RPM builds, reducing x86_64 memory pressure
