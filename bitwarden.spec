@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.2.1
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -215,6 +215,33 @@ cp %{SOURCE4} .electron-cache/electron-v%{electron_ver}-linux-arm64.zip
 # Fedora's system Rust is recent stable and should be compatible.
 rm -f apps/desktop/desktop_native/rust-toolchain.toml
 
+# ---- Reduce renderer webpack memory pressure --------------------------------
+# COPR's x86_64 builders run with a 2 GiB memory request.  Upstream's desktop
+# renderer production build enables full sourcemaps and minification, which is
+# enough to make Angular 20's webpack pass silently fail under that limit.
+#
+# For the RPM build we do not need production sourcemaps, and minification is
+# not required for a packaged local desktop app.  Disabling both keeps the
+# renderer build within COPR's memory budget while preserving runtime behavior.
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path("apps/desktop/webpack.base.js")
+text = path.read_text()
+text = text.replace('    devtool: "source-map",\n', '    devtool: false,\n', 1)
+text = text.replace(
+    '    optimization: {\n      minimizer: [\n',
+    '    optimization: {\n      minimize: false,\n      minimizer: [\n',
+    1,
+)
+text = text.replace(
+    '      new webpack.SourceMapDevToolPlugin({\n        include: ["app/main.js"],\n      }),\n',
+    '',
+    1,
+)
+path.write_text(text)
+PY
+
 # ============================================================================
 #  %build
 # ============================================================================
@@ -292,9 +319,9 @@ popd
 # ---- Webpack bundle (main + renderer + preload) ----------------------------
 # Run each webpack config SEQUENTIALLY so that any failure is immediately
 # visible and fails the build rather than being swallowed by concurrently.
-# Angular 20 AOT compilation can require 3-4 GB of heap; raise the Node.js
-# limit to avoid silent OOM-kills that produce no output files.
-export NODE_OPTIONS="--max-old-space-size=4096"
+# Keep Node's heap below COPR's 2 GiB builder limit while still leaving enough
+# room for the Angular 20 renderer build to finish.
+export NODE_OPTIONS="--max-old-space-size=1400"
 pushd apps/desktop
 # cross-env in each script already sets NODE_ENV=production for webpack itself.
 npm run build:main
@@ -458,6 +485,13 @@ console.log('OK: index.html found in app.asar');
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
+* Fri Mar 20 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-4
+- Patch upstream webpack.base.js during %%prep to disable renderer production
+  sourcemaps and minification for RPM builds, reducing x86_64 memory pressure
+  enough for COPR's 2 GiB builders
+- Lower NODE_OPTIONS heap cap from 4096 to 1400 so webpack stays within the
+  builder memory budget instead of being OOM-killed
+
 * Thu Mar 19 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-3
 - Run webpack builds sequentially (build:main, build:renderer, build:preload)
   instead of via concurrently so that a renderer failure is immediately visible
