@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.2.1
-Release:        6%{?dist}
+Release:        1%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -270,6 +270,23 @@ if text == orig:
 path.write_text(text)
 print("webpack.base.js: sourcemaps + minification disabled for RPM build")
 PY
+
+# Remove native @swc/core binaries on x86_64 (see memory reduction comment above).
+# SWC allocates memory outside the V8 heap, bypassing --max-old-space-size.
+# On x86_64, V8 heap + SWC native memory can exceed COPR's 2 GiB cgroup limit,
+# causing a silent OOM-kill: webpack exits 0 but writes nothing to build/.
+# On aarch64 the x86_64 SWC binary is simply absent, so babel-loader already
+# uses pure-JS fallback — this block is a no-op there.
+%ifarch x86_64
+for swc_node in \
+    node_modules/@swc/core-linux-x64-gnu/swc.linux-x64-gnu.node \
+    node_modules/@swc/core-linux-x64-musl/swc.linux-x64-musl.node; do
+    if [ -f "$swc_node" ]; then
+        rm -f "$swc_node"
+        echo "Removed native SWC binary: $swc_node (memory reduction for COPR x86_64)"
+    fi
+done
+%endif
 
 # ---- Create a dedicated renderer-only webpack config -----------------------
 # webpack.config.js exports a function that returns [mainConfig, rendererConfig,
@@ -563,46 +580,5 @@ console.log('OK: index.html found in app.asar');
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
-* Fri Mar 20 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-6
-- Create webpack.renderer.only.js in %%prep to compile the renderer directly
-  without --config-name filtering; the filtering silently emits no output when
-  applied to a function-based config returning an array on the vendored
-  webpack-cli, causing the renderer to exit 0 with nothing written to build/
-
-* Fri Mar 20 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-5
-- Remove native @swc/core x86_64 binaries from the vendor tarball during %%prep
-  so babel-loader falls back to pure-JS on x86_64 (same as aarch64); the native
-  SWC binary allocates memory outside the V8 heap and was pushing the renderer
-  webpack process above the 2 GiB COPR cgroup limit (silent OOM-kill returning 0)
-- Add error-trapping around the renderer build to catch silent failures
-- Make webpack.base.js patch fail explicitly if the target strings are not found
-- Bump Release to 5
-
-* Fri Mar 20 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-4
-- Patch upstream webpack.base.js during %%prep to disable renderer production
-  sourcemaps and minification for RPM builds, reducing x86_64 memory pressure
-  enough for COPR's 2 GiB builders
-- Lower NODE_OPTIONS heap cap from 4096 to 1400 so webpack stays within the
-  builder memory budget instead of being OOM-killed
-
-* Thu Mar 19 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-3
-- Run webpack builds sequentially (build:main, build:renderer, build:preload)
-  instead of via concurrently so that a renderer failure is immediately visible
-  and fails the RPM build rather than being silently swallowed
-- Set NODE_OPTIONS=--max-old-space-size=4096 for Angular 20 AOT compilation
-  to avoid silent OOM-kills leaving build/index.html absent
-- Add post-webpack assertions: fail the build if build/index.html or
-  build/app/main.js are absent (catches the blank-window root cause at build time)
-- Add asar content check in %%check: fail if index.html is not in app.asar
-
-* Thu Mar 19 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-2
-- Add %%pre scriptlet to remove stale update-alternatives entry for bitwarden
-  that is left behind when the official Bitwarden RPM is uninstalled
-- Pass -c.buildDependenciesFromSource=false to electron-builder to prevent it
-  from rebuilding pre-built Rust native modules during packing
-- Set NODE_ENV=production for the electron-builder invocation
-- Add chmod 0755 for bitwarden-app (Electron binary renamed by after-pack.js)
-- Tighten %%check: fail the build if bitwarden-app or app.asar are absent
-
-* Sun Mar 15 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
+* Sat Mar 21 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
 - Initial package build from upstream source
