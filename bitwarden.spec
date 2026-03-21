@@ -485,6 +485,10 @@ test -f %{buildroot}%{bwdir}/desktop_proxy && \
 test -f %{buildroot}%{bwdir}/resources/desktop_proxy && \
     chmod 0755 %{buildroot}%{bwdir}/resources/desktop_proxy
 
+# ---- License and documentation --------------------------------------------
+install -Dpm 0644 LICENSE.txt %{buildroot}%{_licensedir}/%{name}/LICENSE.txt
+install -Dpm 0644 README.md   %{buildroot}%{_docdir}/%{name}/README.md
+
 # ---- Wrapper script -------------------------------------------------------
 install -Dpm 0755 %{SOURCE10} %{buildroot}%{_bindir}/%{name}
 
@@ -554,8 +558,8 @@ console.log('OK: index.html found in app.asar');
 # Smoke-test: verify the Electron binary responds to --version.
 # bitwarden-app is the actual Electron binary; the wrapper (bitwarden) chains
 # into it but expects a display server which is unavailable in the build env.
-%{buildroot}%{bwdir}/bitwarden-app --version || \
-    echo "WARN: --version smoke test failed (expected in headless env)"
+timeout 10 %{buildroot}%{bwdir}/bitwarden-app --version || \
+    echo "WARN: --version smoke test failed or timed out (expected in headless/desktop env)"
 
 # ============================================================================
 #  %files
