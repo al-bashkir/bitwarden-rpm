@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.2.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -226,17 +226,18 @@ rm -f apps/desktop/desktop_native/rust-toolchain.toml
 #    minification.  For a packaged local desktop app these are unnecessary and
 #    save ~800 MB of peak heap during the Angular compilation.
 #
-# 2) On x86_64 the vendored node_modules include the native @swc/core binary
-#    (swc.linux-x64-gnu.node).  SWC allocates memory outside the V8 heap so it
-#    is not constrained by --max-old-space-size.  On x86_64 SWC native memory
-#    plus the V8 heap can push the total process above the 2 GiB cgroup limit;
-#    the kernel then OOM-kills webpack and npm returns 0 (because npm does not
-#    propagate SIGKILL exit status in all cases), silently producing a build
-#    directory with no index.html.  On aarch64 the x86_64 SWC binary is not
-#    usable so babel-loader falls back to pure-JS and the build succeeds.
+# 2) On x86_64 the vendored node_modules include the sass-embedded Dart VM
+#    binary (sass-embedded-linux-x64/dart-sass/src/dart).  sass-embedded 1.93.2
+#    spawns a Dart VM subprocess to compile SCSS; this subprocess consumes
+#    200–400 MiB outside the V8 heap (not constrained by --max-old-space-size).
+#    Combined with V8 heap (≤1400 MiB) and JIT code cache, the total process
+#    memory exceeds COPR's 2 GiB cgroup limit; the kernel OOM-kills webpack and
+#    cross-env propagates exit 0, silently producing a build directory with no
+#    index.html.  On aarch64 the x86_64 Dart binary is ENOEXEC; sass-embedded
+#    falls back to a pure-JS Node.js subprocess automatically.
 #
-#    Removing the native SWC binary on x86_64 forces the same pure-JS fallback
-#    as aarch64, keeping total process memory within the 2 GiB budget.
+#    Removing the Dart Sass binary directories on x86_64 forces the same
+#    pure-JS fallback as aarch64, keeping total process memory within budget.
 python3 - <<'PY'
 from pathlib import Path
 
@@ -271,21 +272,15 @@ path.write_text(text)
 print("webpack.base.js: sourcemaps + minification disabled for RPM build")
 PY
 
-# Remove native @swc/core binaries on x86_64 (see memory reduction comment above).
-# SWC allocates memory outside the V8 heap, bypassing --max-old-space-size.
-# On x86_64, V8 heap + SWC native memory can exceed COPR's 2 GiB cgroup limit,
-# causing a silent OOM-kill: webpack exits 0 but writes nothing to build/.
-# On aarch64 the x86_64 SWC binary is simply absent, so babel-loader already
-# uses pure-JS fallback — this block is a no-op there.
+# Remove sass-embedded Dart VM binaries on x86_64 (see comment above).
+# The Dart VM subprocess consumes 200-400 MiB outside the V8 heap; removing
+# these directories forces sass-embedded to fall back to a pure-JS Node.js
+# subprocess, matching aarch64's behavior.
 %ifarch x86_64
-for swc_node in \
-    node_modules/@swc/core-linux-x64-gnu/swc.linux-x64-gnu.node \
-    node_modules/@swc/core-linux-x64-musl/swc.linux-x64-musl.node; do
-    if [ -f "$swc_node" ]; then
-        rm -f "$swc_node"
-        echo "Removed native SWC binary: $swc_node (memory reduction for COPR x86_64)"
-    fi
-done
+rm -rf \
+    node_modules/sass-embedded-linux-x64 \
+    node_modules/sass-embedded-linux-musl-x64
+echo "Removed Dart Sass embedded binaries (memory reduction for COPR x86_64)"
 %endif
 
 # ---- Create a dedicated renderer-only webpack config -----------------------
@@ -584,5 +579,13 @@ timeout 10 %{buildroot}%{bwdir}/bitwarden-app --version || \
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
+* Mon Mar 23 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-2
+- Remove sass-embedded Dart VM binaries on x86_64 during %%prep; the Dart VM
+  subprocess consumes 200-400 MiB outside the V8 heap, pushing total process
+  memory above COPR's 2 GiB cgroup limit and OOM-killing the renderer webpack
+- Install LICENSE.txt and README.md to BUILDROOT for %%license/%%doc macros
+- Wrap bitwarden-app --version smoke test with timeout to prevent blocking on
+  headless/desktop build environments
+
 * Sat Mar 21 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
 - Initial package build from upstream source
