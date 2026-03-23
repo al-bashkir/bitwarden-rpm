@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.2.1
-Release:        2%{?dist}
+Release:        1%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -229,15 +229,11 @@ rm -f apps/desktop/desktop_native/rust-toolchain.toml
 # 2) On x86_64 the vendored node_modules include the sass-embedded Dart VM
 #    binary (sass-embedded-linux-x64/dart-sass/src/dart).  sass-embedded 1.93.2
 #    spawns a Dart VM subprocess to compile SCSS; this subprocess consumes
-#    200–400 MiB outside the V8 heap (not constrained by --max-old-space-size).
-#    Combined with V8 heap (≤1400 MiB) and JIT code cache, the total process
-#    memory exceeds COPR's 2 GiB cgroup limit; the kernel OOM-kills webpack and
-#    cross-env propagates exit 0, silently producing a build directory with no
-#    index.html.  On aarch64 the x86_64 Dart binary is ENOEXEC; sass-embedded
-#    falls back to a pure-JS Node.js subprocess automatically.
-#
-#    Removing the Dart Sass binary directories on x86_64 forces the same
-#    pure-JS fallback as aarch64, keeping total process memory within budget.
+#    200–400 MiB outside the V8 heap.  Removing the Dart VM directories forces
+#    a pure-JS Node.js subprocess fallback (matching aarch64), reducing peak
+#    memory by ~200 MiB.  This alone is NOT sufficient — the primary OOM cause
+#    is V8 JIT code accumulation (400-600 MiB on x86_64), which is addressed
+#    by --jitless in %build.  Dart Sass removal is kept as belt-and-suspenders.
 python3 - <<'PY'
 from pathlib import Path
 
@@ -408,7 +404,18 @@ npm run build:main
 # --config-name filtering that silently produces no output when applied to a
 # function-based config returning an array on this webpack-cli version.
 set +e
+%ifarch x86_64
+# V8 JIT code cache accumulates 400-600 MiB during Angular AOT compilation
+# (1500+ modules) and is NOT bounded by --max-old-space-size.  Combined with
+# the V8 heap (1400 MiB) this pushes x86_64 above COPR's 2 GiB cgroup limit.
+# --jitless disables all JIT tiers (Sparkplug/Maglev/TurboFan), eliminating
+# JIT code memory entirely.  Build is ~2x slower but well within the 5-hour
+# COPR timeout.  aarch64 JIT footprint is smaller and fits; no flag needed.
+NODE_OPTIONS="--max-old-space-size=1400 --jitless" \
+    cross-env NODE_ENV=production webpack --config webpack.renderer.only.js
+%else
 cross-env NODE_ENV=production webpack --config webpack.renderer.only.js
+%endif
 _renderer_exit=$?
 set -e
 printf "renderer webpack exit code: %d\n" "$_renderer_exit"
@@ -579,13 +586,5 @@ timeout 10 %{buildroot}%{bwdir}/bitwarden-app --version || \
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
-* Mon Mar 23 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-2
-- Remove sass-embedded Dart VM binaries on x86_64 during %%prep; the Dart VM
-  subprocess consumes 200-400 MiB outside the V8 heap, pushing total process
-  memory above COPR's 2 GiB cgroup limit and OOM-killing the renderer webpack
-- Install LICENSE.txt and README.md to BUILDROOT for %%license/%%doc macros
-- Wrap bitwarden-app --version smoke test with timeout to prevent blocking on
-  headless/desktop build environments
-
-* Sat Mar 21 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
+* Mon Mar 23 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
 - Initial package build from upstream source
