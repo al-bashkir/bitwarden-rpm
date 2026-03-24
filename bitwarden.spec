@@ -313,7 +313,15 @@ const configs = buildConfig({
   },
 });
 /* buildConfig returns [mainConfig, rendererConfig, preloadConfig]; export [1] */
-module.exports = configs[1];
+const config = configs[1];
+/* When running with --jitless (x86_64 COPR memory constraint), WebAssembly is
+ * unavailable and webpack's default md4 WASM hash module crashes.  xxhash64 is
+ * a pure-JS hash built into Node.js — no WASM needed, same performance tier. */
+if (typeof WebAssembly === "undefined") {
+  config.output = config.output || {};
+  config.output.hashFunction = "xxhash64";
+}
+module.exports = config;
 RENDERER_CFG_EOF
 
 # ============================================================================
