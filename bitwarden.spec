@@ -10,7 +10,7 @@
 # Offline build: all npm and Cargo dependencies are pre-vendored.
 #   Source1 — npm node_modules  (arch-SPECIFIC, see generate-vendor-tarball.sh)
 #   Source2 — cargo vendor      (arch-independent, pure Rust source)
-#   Source3/4 — Electron zips   (one per supported arch)
+#   Source3 — Electron arm64 zip
 #
 # See AGENTS.md for maintenance and update instructions.
 # ---------------------------------------------------------------------------
@@ -61,10 +61,9 @@ Source1:        %{name}-%{version}-node-vendor.tar.zst
 # Source2 — vendored Cargo crates (arch-independent source code).
 Source2:        %{name}-%{version}-cargo-vendor.tar.zst
 
-# Source3-4 — pre-built Electron binaries (one per arch).
+# Source3 — pre-built Electron binary (aarch64 only).
 # Electron is not available as a system package on any Linux distribution.
-Source3:        https://github.com/electron/electron/releases/download/v%{electron_ver}/electron-v%{electron_ver}-linux-x64.zip
-Source4:        https://github.com/electron/electron/releases/download/v%{electron_ver}/electron-v%{electron_ver}-linux-arm64.zip
+Source3:        https://github.com/electron/electron/releases/download/v%{electron_ver}/electron-v%{electron_ver}-linux-arm64.zip
 
 # Source10-12 — auxiliary integration files, maintained in this repo.
 Source10:       bitwarden.sh
@@ -72,10 +71,9 @@ Source11:       com.bitwarden.desktop.desktop
 Source12:       com.bitwarden.desktop.metainfo.xml
 
 # ---- Architecture ---------------------------------------------------------
-# Electron ships Linux binaries for x86_64 and aarch64 only.
-# The upstream Rust napi module (@bitwarden/desktop-napi) lists exactly
-# these two Linux targets.  No other architecture is viable.
-ExclusiveArch:  x86_64 aarch64
+# This package currently targets aarch64 only.  Upstream supports x86_64 too,
+# but it is excluded here to reduce COPR build resources.
+ExclusiveArch:  aarch64
 
 # ---- Build Dependencies ---------------------------------------------------
 # Node.js / npm — upstream requires node >= 22.12.0 (CalVer "Jod" LTS).
@@ -192,23 +190,13 @@ tar --zstd -xf %{SOURCE2} -C apps/desktop/desktop_native
 # We extract the arch-correct zip there and write path.txt so the package's
 # JS entrypoint can locate it.
 mkdir -p node_modules/electron/dist
-%ifarch x86_64
 unzip -q -o %{SOURCE3} -d node_modules/electron/dist/
-%endif
-%ifarch aarch64
-unzip -q -o %{SOURCE4} -d node_modules/electron/dist/
-%endif
 echo 'dist/electron' > node_modules/electron/path.txt
 chmod 0755 node_modules/electron/dist/electron
 
 # Set up electron-builder's cache so it doesn't try to download Electron.
 mkdir -p .electron-cache
-%ifarch x86_64
-cp %{SOURCE3} .electron-cache/electron-v%{electron_ver}-linux-x64.zip
-%endif
-%ifarch aarch64
-cp %{SOURCE4} .electron-cache/electron-v%{electron_ver}-linux-arm64.zip
-%endif
+cp %{SOURCE3} .electron-cache/electron-v%{electron_ver}-linux-arm64.zip
 
 # ---- Remove upstream Rust toolchain pin ------------------------------------
 # Upstream pins an exact Rust version for developer reproducibility.
@@ -216,24 +204,9 @@ cp %{SOURCE4} .electron-cache/electron-v%{electron_ver}-linux-arm64.zip
 rm -f apps/desktop/desktop_native/rust-toolchain.toml
 
 # ---- Reduce renderer webpack memory pressure --------------------------------
-# COPR's x86_64 builders run with a 2 GiB memory request.  Upstream's desktop
-# renderer production build enables full sourcemaps and minification, which is
-# enough to make Angular 20's webpack pass silently fail under that limit.
-#
-# Two changes are made here:
-#
-# 1) webpack.base.js is patched inline to disable renderer sourcemaps and
-#    minification.  For a packaged local desktop app these are unnecessary and
-#    save ~800 MB of peak heap during the Angular compilation.
-#
-# 2) On x86_64 the vendored node_modules include the sass-embedded Dart VM
-#    binary (sass-embedded-linux-x64/dart-sass/src/dart).  sass-embedded 1.93.2
-#    spawns a Dart VM subprocess to compile SCSS; this subprocess consumes
-#    200–400 MiB outside the V8 heap.  Removing the Dart VM directories forces
-#    a pure-JS Node.js subprocess fallback (matching aarch64), reducing peak
-#    memory by ~200 MiB.  This alone is NOT sufficient — the primary OOM cause
-#    is V8 JIT code accumulation (400-600 MiB on x86_64), which is addressed
-#    by --jitless in %build.  Dart Sass removal is kept as belt-and-suspenders.
+# Upstream's desktop renderer production build enables full sourcemaps and
+# minification.  For a packaged local desktop app these are unnecessary;
+# disabling them saves ~800 MB of peak V8 heap during Angular compilation.
 python3 - <<'PY'
 from pathlib import Path
 
@@ -268,24 +241,10 @@ path.write_text(text)
 print("webpack.base.js: sourcemaps + minification disabled for RPM build")
 PY
 
-# Remove sass-embedded Dart VM binaries on x86_64 (see comment above).
-# The Dart VM subprocess consumes 200-400 MiB outside the V8 heap; removing
-# these directories forces sass-embedded to fall back to a pure-JS Node.js
-# subprocess, matching aarch64's behavior.
-%ifarch x86_64
-rm -rf \
-    node_modules/sass-embedded-linux-x64 \
-    node_modules/sass-embedded-linux-musl-x64
-echo "Removed Dart Sass embedded binaries (memory reduction for COPR x86_64)"
-%endif
-
 # ---- Create a dedicated renderer-only webpack config -----------------------
 # webpack.config.js exports a function that returns [mainConfig, rendererConfig,
-# preloadConfig].  Using `--config-name renderer` to filter this array silently
-# produces no output on COPR x86_64 builders (webpack exits 0 but writes
-# nothing).  The root cause is that `--config-name` filtering on function-based
-# configs that return arrays does not work reliably across all webpack-cli
-# versions present in the vendored node_modules.
+# preloadConfig].  `--config-name renderer` filtering on function-based configs
+# returning arrays does not work reliably across all webpack-cli versions.
 #
 # Workaround: create a thin wrapper config (webpack.renderer.only.js) that
 # directly imports webpack.base.js's buildConfig(), calls it, and exports only
@@ -313,15 +272,7 @@ const configs = buildConfig({
   },
 });
 /* buildConfig returns [mainConfig, rendererConfig, preloadConfig]; export [1] */
-const config = configs[1];
-/* When running with --jitless (x86_64 COPR memory constraint), WebAssembly is
- * unavailable and webpack's default md4 WASM hash module crashes.  xxhash64 is
- * a pure-JS hash built into Node.js — no WASM needed, same performance tier. */
-if (typeof WebAssembly === "undefined") {
-  config.output = config.output || {};
-  config.output.hashFunction = "xxhash64";
-}
-module.exports = config;
+module.exports = configs[1];
 RENDERER_CFG_EOF
 
 # ============================================================================
@@ -346,9 +297,9 @@ export ELECTRON_OVERRIDE_DIST_PATH=$PWD/node_modules/electron/dist
 
 # ---- Create napi CLI shim -------------------------------------------------
 # @napi-rs/cli is published as a pre-compiled binary with platform-specific
-# optional packages (e.g., @napi-rs/cli-linux-x64-gnu).  The vendor tarball
-# is created on x86_64, so the aarch64 variant is absent — `napi` command is
-# not found on aarch64 builders.
+# optional packages (e.g., @napi-rs/cli-linux-arm64-gnu).  The vendor tarball
+# may not include the correct platform variant — `napi` command may not be
+# found on aarch64 builders.
 #
 # Solution: inject a shim that replaces `napi build --platform --no-js` with
 # a direct `cargo build --release` invocation.  The shim is placed in
@@ -363,13 +314,8 @@ cat > .bin-override/napi << 'NAPI_SHIM_EOF'
 #!/usr/bin/bash
 # napi shim — replaces @napi-rs/cli for `napi build --platform --no-js`
 set -euo pipefail
-ARCH=$(uname -m)
-case "$ARCH" in
-    x86_64)  SUFFIX="linux-x64-gnu" ;;
-    aarch64) SUFFIX="linux-arm64-gnu" ;;
-    *)       echo "napi shim: unsupported arch: $ARCH" >&2; exit 1 ;;
-esac
-echo "napi shim: building desktop_napi (release) for $ARCH → desktop_napi.${SUFFIX}.node"
+SUFFIX="linux-arm64-gnu"
+echo "napi shim: building desktop_napi (release) → desktop_napi.${SUFFIX}.node"
 cargo build --release
 cp "../target/release/libdesktop_napi.so" "desktop_napi.${SUFFIX}.node"
 NAPI_SHIM_EOF
@@ -412,18 +358,7 @@ npm run build:main
 # --config-name filtering that silently produces no output when applied to a
 # function-based config returning an array on this webpack-cli version.
 set +e
-%ifarch x86_64
-# V8 JIT code cache accumulates 400-600 MiB during Angular AOT compilation
-# (1500+ modules) and is NOT bounded by --max-old-space-size.  Combined with
-# the V8 heap (1400 MiB) this pushes x86_64 above COPR's 2 GiB cgroup limit.
-# --jitless disables all JIT tiers (Sparkplug/Maglev/TurboFan), eliminating
-# JIT code memory entirely.  Build is ~2x slower but well within the 5-hour
-# COPR timeout.  aarch64 JIT footprint is smaller and fits; no flag needed.
-NODE_OPTIONS="--max-old-space-size=1400 --jitless" \
-    cross-env NODE_ENV=production webpack --config webpack.renderer.only.js
-%else
 cross-env NODE_ENV=production webpack --config webpack.renderer.only.js
-%endif
 _renderer_exit=$?
 set -e
 printf "renderer webpack exit code: %d\n" "$_renderer_exit"
@@ -451,27 +386,15 @@ test -f apps/desktop/build/app/main.js || \
 # builder's own Node context inherits the shell environment).
 export NODE_ENV=production
 pushd apps/desktop
-%ifarch x86_64
-npx electron-builder --linux --x64 --dir --config electron-builder.json \
-    -c.buildDependenciesFromSource=false -p never
-%endif
-%ifarch aarch64
 npx electron-builder --linux --arm64 --dir --config electron-builder.json \
     -c.buildDependenciesFromSource=false -p never
-%endif
 popd
 
 # ============================================================================
 #  %install
 # ============================================================================
 %install
-# Determine the unpacked directory name (differs by arch)
-%ifarch x86_64
-eb_unpacked=apps/desktop/dist/linux-unpacked
-%endif
-%ifarch aarch64
 eb_unpacked=apps/desktop/dist/linux-arm64-unpacked
-%endif
 
 # ---- Application bundle ---------------------------------------------------
 install -d %{buildroot}%{bwdir}
@@ -594,5 +517,5 @@ timeout 10 %{buildroot}%{bwdir}/bitwarden-app --version || \
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
-* Mon Mar 23 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
+* Sat Mar 28 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
 - Initial package build from upstream source
