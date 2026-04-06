@@ -41,7 +41,7 @@
 
 Name:           bitwarden
 Version:        2026.3.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        A secure and free password manager for all of your devices
 
 License:        GPL-3.0-only
@@ -65,8 +65,7 @@ Source2:        %{name}-%{version}-cargo-vendor.tar.zst
 # Electron is not available as a system package on any Linux distribution.
 Source3:        https://github.com/electron/electron/releases/download/v%{electron_ver}/electron-v%{electron_ver}-linux-arm64.zip
 
-# Source10-12 — auxiliary integration files, maintained in this repo.
-Source10:       bitwarden.sh
+# Source11-12 — auxiliary integration files, maintained in this repo.
 Source11:       com.bitwarden.desktop.desktop
 Source12:       com.bitwarden.desktop.metainfo.xml
 
@@ -422,8 +421,12 @@ test -f %{buildroot}%{bwdir}/resources/desktop_proxy && \
 install -Dpm 0644 LICENSE.txt %{buildroot}%{_licensedir}/%{name}/LICENSE.txt
 install -Dpm 0644 README.md   %{buildroot}%{_docdir}/%{name}/README.md
 
-# ---- Wrapper script -------------------------------------------------------
-install -Dpm 0755 %{SOURCE10} %{buildroot}%{_bindir}/%{name}
+# ---- Launcher symlink ------------------------------------------------------
+# /usr/bin/bitwarden → /usr/lib/bitwarden/bitwarden (upstream linux-wrapper.sh
+# installed by after-pack.js).  The wrapper already handles symlinks via
+# readlink -f, so no intermediate shell script is needed.
+install -d %{buildroot}%{_bindir}
+ln -s %{bwdir}/bitwarden %{buildroot}%{_bindir}/%{name}
 
 # ---- Desktop entry ---------------------------------------------------------
 install -Dpm 0644 %{SOURCE11} \
@@ -508,7 +511,7 @@ timeout 10 %{buildroot}%{bwdir}/bitwarden-app --version || \
 # Application bundle
 %{bwdir}
 
-# Launcher wrapper
+# Launcher symlink
 %{_bindir}/%{name}
 
 # Desktop integration
@@ -517,5 +520,11 @@ timeout 10 %{buildroot}%{bwdir}/bitwarden-app --version || \
 %{_metainfodir}/com.bitwarden.desktop.metainfo.xml
 
 %changelog
-* Sat Mar 28 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
+* Mon Apr 06 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.3.1-2
+- Replace launcher wrapper script (bitwarden.sh) with symlink to upstream linux-wrapper.sh
+
+* Thu Apr 02 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.3.1-1
+- Update to upstream 2026.3.1
+
+* Sun Mar 15 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.2.1-1
 - Initial package build from upstream source
