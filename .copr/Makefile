@@ -27,9 +27,12 @@
 
 # COPR invokes: make srpm outdir="..." spec="<spec_path>"  (lowercase spec=)
 # Command-line override uses uppercase SPEC=.  Fall back to bitwarden.spec.
-SPEC    ?= $(or $(spec),bitwarden.spec)
-VERSION := $(shell rpmspec -q --queryformat '%{VERSION}\n' $(SPEC) 2>/dev/null | head -1)
-NAME    := $(shell rpmspec -q --queryformat '%{NAME}\n' $(SPEC) 2>/dev/null | head -1)
+SPEC     ?= $(or $(spec),bitwarden.spec)
+# SPECFILE is the basename of SPEC; COPR passes spec= as a full absolute path,
+# so we must not concatenate it onto rpmbuild/SPECS/ directly.
+SPECFILE := $(notdir $(SPEC))
+VERSION  := $(shell rpmspec -q --queryformat '%{VERSION}\n' $(SPEC) 2>/dev/null | head -1)
+NAME     := $(shell rpmspec -q --queryformat '%{NAME}\n' $(SPEC) 2>/dev/null | head -1)
 
 # COPR passes outdir=<path>; default to current directory for local use
 outdir ?= .
@@ -68,7 +71,7 @@ srpm:
 	# ---- Build SRPM ----
 	rpmbuild \
 		--define "_topdir $(CURDIR)/rpmbuild" \
-		-bs rpmbuild/SPECS/$(SPEC)
+		-bs rpmbuild/SPECS/$(SPECFILE)
 
 	# ---- Copy result to output directory ----
 	cp rpmbuild/SRPMS/*.src.rpm $(outdir)/
