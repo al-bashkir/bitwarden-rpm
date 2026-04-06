@@ -7,8 +7,10 @@
 # published on GitHub Releases.  Shell completions are generated from the
 # binary during %%build.
 #
-# Only ZSH completion is supported by this version of the CLI
-# ("Valid shells are `zsh`" per upstream source).
+# Only ZSH completion is supported by this version of the CLI.
+# Upstream completion.command.ts has validShells = ["zsh"] — bash is not
+# implemented.  The completion file is installed to the standard Fedora path
+# /usr/share/zsh/site-functions/_bw.
 #
 # To update: change Version and rebuild the SRPM.  No vendor tarballs are
 # needed — the only Source is the prebuilt zip from GitHub Releases.
@@ -16,11 +18,17 @@
 
 %global debug_package %{nil}
 
+# The bw binary is a pkg-bundled Node.js executable.  It embeds a virtual
+# filesystem snapshot at a known byte offset inside itself and reads it back
+# via /proc/self/exe at runtime.  Stripping the binary shifts that offset,
+# causing the runtime error "Pkg: Error reading from file."  Disable strip.
+%define __strip /bin/true
+
 %global cli_tag     cli-v%{version}
 
 Name:           bw
 Version:        2026.3.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Bitwarden Password Manager CLI
 
 License:        GPL-3.0-only
@@ -71,7 +79,7 @@ unzip -j %{SOURCE0} bw
 chmod 0755 bw
 
 # Generate ZSH shell completion.
-# The CLI docs confirm: "Valid shells are `zsh`."
+# Upstream only supports zsh (validShells = ["zsh"] in completion.command.ts).
 # The output is written to _bw (conventional zsh completion file name).
 ./bw completion --shell zsh > _bw
 
@@ -85,9 +93,9 @@ test -s _bw || { echo "ERROR: bw completion --shell zsh produced no output"; exi
 # Binary
 install -Dpm 0755 bw %{buildroot}%{_bindir}/%{name}
 
-# ZSH vendor completion
+# ZSH completion — standard Fedora location
 install -Dpm 0644 _bw \
-    %{buildroot}%{_datadir}/zsh/vendor-completions/_%{name}
+    %{buildroot}%{_datadir}/zsh/site-functions/_%{name}
 
 # ============================================================================
 #  %check
@@ -101,7 +109,7 @@ install -Dpm 0644 _bw \
 # ============================================================================
 %files
 %{_bindir}/%{name}
-%{_datadir}/zsh/vendor-completions/_%{name}
+%{_datadir}/zsh/site-functions/_%{name}
 
 %changelog
 * Mon Apr 06 2026 Aksenov Pavel <41126916+al-bashkir@users.noreply.github.com> - 2026.3.0-1
