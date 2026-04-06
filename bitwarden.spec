@@ -40,7 +40,7 @@
 %global bwdir           %{_prefix}/lib/%{name}
 
 Name:           bitwarden
-Version:        2026.2.1
+Version:        2026.3.1
 Release:        1%{?dist}
 Summary:        A secure and free password manager for all of your devices
 

@@ -48,6 +48,11 @@
 
   <!-- FIXME: update <releases> on every version bump -->
   <releases>
+    <release version="2026.3.1" date="2026-04-02">
+      <description>
+        <p>Desktop release 2026.3.1</p>
+      </description>
+    </release>
     <release version="2026.2.1" date="2026-02-15">
       <description>
         <p>Desktop release 2026.2.1</p>
